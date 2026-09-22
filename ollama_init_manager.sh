@@ -39,7 +39,8 @@ command_exists() {
 
 pause() {
     echo
-    read -r -p "Press Enter to continue..." < /dev/tty
+    printf '%s' "Press Enter to continue, ESC/Backspace for Main Menu..."
+    read -r < /dev/tty
 }
 
 header() {
@@ -52,6 +53,87 @@ header() {
     printf '%s\n' "${CYAN}${BOLD}╚══════════════════════════════════════════════════════════╝${RESET}"
 
     echo
+}
+
+# ─────────────────────────────────────────────────────────────
+# Navigation
+#
+# Return codes:
+#   0 = Enter
+#   10 = Back / ESC
+#   1 = Other key
+# ─────────────────────────────────────────────────────────────
+
+read_navigation_key() {
+
+    local KEY
+    local REST
+
+    IFS= read -rsn1 KEY < /dev/tty
+
+    # Enter
+    if [ -z "$KEY" ]; then
+        return 0
+    fi
+
+    # Backspace
+    if [ "$KEY" = $'\177' ] || [ "$KEY" = $'\b' ]; then
+        return 10
+    fi
+
+    # ESC
+    if [ "$KEY" = $'\e' ]; then
+
+        # Give terminal escape sequences a short opportunity
+        # to complete so arrow/function keys are not mistaken
+        # for the Back command.
+        if IFS= read -rsn2 -t 0.05 REST < /dev/tty; then
+            return 1
+        fi
+
+        return 10
+    fi
+
+    return 1
+}
+
+page_footer() {
+
+    echo
+
+    printf '%s\n' "${DIM}────────────────────────────────────────────────────────────${RESET}"
+    printf '%s\n' "${DIM}[ESC] / [Backspace]  Back to Main Menu    [Enter]  Continue${RESET}"
+
+    echo
+}
+
+# ─────────────────────────────────────────────────────────────
+# Navigation-only Page Pause
+# ─────────────────────────────────────────────────────────────
+
+navigation_pause() {
+
+    while true; do
+
+        read_navigation_key
+        local RESULT=$?
+
+        case "$RESULT" in
+
+            0)
+                return 0
+                ;;
+
+            10)
+                return 10
+                ;;
+
+            *)
+                ;;
+
+        esac
+
+    done
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -258,13 +340,9 @@ install_or_update_ollama() {
     refresh_model_bulletin
 
     if [ "$OLLAMA_INSTALLED" = true ]; then
-
         printf '%s\n' "${BOLD}Update Ollama${RESET}"
-
     else
-
         printf '%s\n' "${BOLD}Install Ollama${RESET}"
-
     fi
 
     echo
@@ -291,9 +369,7 @@ install_or_update_ollama() {
     configure_models_directory
 
     if [ "$OLLAMA_INSTALLED" = true ]; then
-
         printf '%s\n' "  Current version : ${OLLAMA_VERSION}"
-
     fi
 
     printf '%s\n' "  Model directory : ${OLLAMA_MODELS}"
@@ -313,7 +389,9 @@ install_or_update_ollama() {
 
         printf '%s\n' "${RED}✗ Ollama installation failed.${RESET}"
 
-        pause
+        page_footer
+
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -400,7 +478,9 @@ EOF
 
     echo
 
-    pause
+    page_footer
+
+    navigation_pause >/dev/null || true
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -424,8 +504,13 @@ start_ollama() {
         printf '%s\n' "${RED}✗ Ollama is not installed.${RESET}"
         printf '%s\n' "${DIM}Use option [1] to install Ollama.${RESET}"
 
-        pause
-        return
+        page_footer
+
+        if navigation_pause; then
+            return
+        else
+            return
+        fi
     fi
 
     configure_models_directory
@@ -441,17 +526,11 @@ start_ollama() {
         printf '%s\n' "${YELLOW}→${RESET} Restarting..."
 
         if is_systemd; then
-
             systemctl restart ollama
-
         else
-
             pkill -x ollama 2>/dev/null || true
-
             sleep 2
-
             start_ollama_container
-
         fi
 
     else
@@ -459,13 +538,9 @@ start_ollama() {
         printf '%s\n' "${YELLOW}→${RESET} Starting Ollama..."
 
         if is_systemd; then
-
             systemctl restart ollama
-
         else
-
             start_ollama_container
-
         fi
 
     fi
@@ -475,19 +550,16 @@ start_ollama() {
     echo
 
     if ollama_running; then
-
         printf '%s\n' "${GREEN}✓${RESET} Ollama is running."
-
     else
-
         printf '%s\n' "${RED}✗ Ollama failed to start.${RESET}"
         printf '%s\n' "${DIM}Check /var/log/ollama-runpod.log${RESET}"
-
     fi
 
     echo
 
-    pause
+    page_footer
+    navigation_pause >/dev/null || true
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -510,20 +582,17 @@ stop_ollama() {
 
         printf '%s\n' "${DIM}Ollama is not running.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
     printf '%s\n' "${YELLOW}→${RESET} Stopping Ollama..."
 
     if is_systemd; then
-
         systemctl stop ollama
-
     else
-
         pkill -x ollama 2>/dev/null || true
-
     fi
 
     sleep 2
@@ -531,18 +600,15 @@ stop_ollama() {
     echo
 
     if ollama_running; then
-
         printf '%s\n' "${RED}✗ Ollama is still running.${RESET}"
-
     else
-
         printf '%s\n' "${GREEN}✓${RESET} Ollama stopped."
-
     fi
 
     echo
 
-    pause
+    page_footer
+    navigation_pause >/dev/null || true
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -570,18 +636,15 @@ ollama_status() {
 
         printf '%s\n' "  Installed : ${RED}NO${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
     if ollama_running; then
-
         printf '%s\n' "  Status    : ${GREEN}RUNNING${RESET}"
-
     else
-
         printf '%s\n' "  Status    : ${RED}STOPPED${RESET}"
-
     fi
 
     echo
@@ -600,9 +663,8 @@ ollama_status() {
 
     fi
 
-    echo
-
-    pause
+    page_footer
+    navigation_pause >/dev/null || true
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -625,7 +687,8 @@ list_models() {
 
         printf '%s\n' "${RED}✗ Ollama is not installed.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -633,7 +696,8 @@ list_models() {
 
         printf '%s\n' "${RED}✗ Ollama is not running.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -644,13 +708,12 @@ list_models() {
     printf '%s\n' "${DIM}Model directory:${RESET}"
     printf '%s\n' "${OLLAMA_MODELS}"
 
-    echo
-
-    pause
+    page_footer
+    navigation_pause >/dev/null || true
 }
 
 # ─────────────────────────────────────────────────────────────
-# Manual Model Bulletin Refresh
+# Refresh Local Models
 # ─────────────────────────────────────────────────────────────
 
 refresh_models_page() {
@@ -667,9 +730,8 @@ refresh_models_page() {
 
     printf '%s\n' "${GREEN}✓${RESET} Local model bulletin refreshed."
 
-    echo
-
-    pause
+    page_footer
+    navigation_pause >/dev/null || true
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -692,7 +754,8 @@ pull_ollama_model() {
 
         printf '%s\n' "${RED}✗ Ollama is not installed.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -700,7 +763,8 @@ pull_ollama_model() {
 
         printf '%s\n' "${RED}✗ Ollama is not running.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -714,7 +778,8 @@ pull_ollama_model() {
 
         printf '%s\n' "${RED}✗ No model specified.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -738,7 +803,8 @@ pull_ollama_model() {
 
     show_model_bulletin
 
-    pause
+    page_footer
+    navigation_pause >/dev/null || true
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -791,7 +857,8 @@ query_hf_repo() {
 
         printf '%s\n' "${RED}✗ No repository supplied.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -802,7 +869,8 @@ query_hf_repo() {
         printf '%s\n' "${RED}✗ Invalid Hugging Face repository format.${RESET}"
         printf '%s\n' "${DIM}Expected: username/repository${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -817,7 +885,8 @@ query_hf_repo() {
 
         printf '%s\n' "${RED}✗ Unable to query repository.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     }
 
@@ -842,9 +911,8 @@ query_hf_repo() {
         ' |
         sort
 
-    echo
-
-    pause
+    page_footer
+    navigation_pause >/dev/null || true
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -867,7 +935,8 @@ pull_hf_model() {
 
         printf '%s\n' "${RED}✗ Ollama is not installed.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -875,7 +944,8 @@ pull_hf_model() {
 
         printf '%s\n' "${RED}✗ Ollama is not running.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -891,7 +961,8 @@ pull_hf_model() {
 
         printf '%s\n' "${RED}✗ No repository supplied.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -901,7 +972,8 @@ pull_hf_model() {
 
         printf '%s\n' "${RED}✗ Invalid Hugging Face repository format.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -914,7 +986,8 @@ pull_hf_model() {
 
         printf '%s\n' "${RED}✗ Unable to query repository.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     }
 
@@ -931,7 +1004,8 @@ pull_hf_model() {
 
         printf '%s\n' "${RED}✗ No GGUF files found in this repository.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -958,7 +1032,8 @@ pull_hf_model() {
 
         printf '%s\n' "${RED}✗ Invalid selection.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -979,13 +1054,9 @@ pull_hf_model() {
     echo
 
     if [ -n "$QUANT" ]; then
-
         MODEL_REF="hf.co/${REPO}:${QUANT}"
-
     else
-
         MODEL_REF="hf.co/${REPO}"
-
     fi
 
     printf '%s\n' "${BOLD}Ollama reference${RESET}"
@@ -1000,7 +1071,8 @@ pull_hf_model() {
 
         printf '%s\n' "${DIM}Cancelled.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -1024,7 +1096,8 @@ pull_hf_model() {
 
     show_model_bulletin
 
-    pause
+    page_footer
+    navigation_pause >/dev/null || true
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -1047,7 +1120,8 @@ show_model() {
 
         printf '%s\n' "${RED}✗ Ollama is not running.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -1058,7 +1132,8 @@ show_model() {
 
         printf '%s\n' "${RED}✗ No model specified.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -1068,7 +1143,8 @@ show_model() {
 
     echo
 
-    pause
+    page_footer
+    navigation_pause >/dev/null || true
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -1091,7 +1167,8 @@ remove_model() {
 
         printf '%s\n' "${RED}✗ Ollama is not running.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -1102,7 +1179,8 @@ remove_model() {
 
         printf '%s\n' "${RED}✗ No model specified.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -1115,7 +1193,8 @@ remove_model() {
 
         printf '%s\n' "${DIM}Cancelled.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -1136,7 +1215,8 @@ remove_model() {
 
     show_model_bulletin
 
-    pause
+    page_footer
+    navigation_pause >/dev/null || true
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -1159,7 +1239,8 @@ run_model() {
 
         printf '%s\n' "${RED}✗ Ollama is not running.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -1170,7 +1251,8 @@ run_model() {
 
         printf '%s\n' "${RED}✗ No model specified.${RESET}"
 
-        pause
+        page_footer
+        navigation_pause >/dev/null || true
         return
     fi
 
@@ -1202,7 +1284,7 @@ while true; do
 
     check_ollama_installed
 
-    # Fresh model query every time the landing page is displayed.
+    # Fresh model query every time the main menu is displayed.
     refresh_model_bulletin
 
     printf '%s\n' "${BOLD}Ollama Configuration${RESET}"
