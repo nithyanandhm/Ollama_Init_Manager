@@ -71,6 +71,8 @@ header() {
 initialize_manager_state() {
     mkdir -p "$MANAGER_CONFIG_DIR"
 
+    # Create the persistent JSON templates on the first manager run.
+    # Existing valid histories are preserved.
     if [ ! -f "$RECENT_HF_FILE" ]; then
         cat > "$RECENT_HF_FILE" <<'EOF'
 {
@@ -93,6 +95,39 @@ EOF
 EOF
     fi
 
+    # If either file exists but is malformed, replace only that malformed
+    # state file with a clean template. Valid history is never overwritten.
+    if ! jq -e '
+        (.version == 1) and
+        (.max_entries == 15) and
+        (.repositories | type == "array")
+    ' "$RECENT_HF_FILE" >/dev/null 2>&1; then
+        cat > "$RECENT_HF_FILE" <<'EOF'
+{
+  "version": 1,
+  "max_entries": 15,
+  "description": "Persistent recent Hugging Face repository query history for RunPod Ollama Manager.",
+  "repositories": []
+}
+EOF
+    fi
+
+    if ! jq -e '
+        (.version == 1) and
+        (.max_entries == 15) and
+        (.repositories | type == "array")
+    ' "$RECENT_OLLAMA_FILE" >/dev/null 2>&1; then
+        cat > "$RECENT_OLLAMA_FILE" <<'EOF'
+{
+  "version": 1,
+  "max_entries": 15,
+  "description": "Persistent recent Ollama repository query history for RunPod Ollama Manager.",
+  "repositories": []
+}
+EOF
+    fi
+
+    # State files are read-only whenever the manager is not running.
     chmod 444 "$RECENT_HF_FILE"
     chmod 444 "$RECENT_OLLAMA_FILE"
 }
@@ -477,6 +512,18 @@ record_recent_hf_repo() {
     fi
 
     refresh_recent_hf_bulletin
+}
+
+# ============================================================
+# Recent Hugging Face repository bulletin
+# ============================================================
+
+show_recent_hf_bulletin() {
+    echo -e "${WHITE}RECENTLY QUERIED HUGGING FACE MODELS${RESET}"
+    echo "──────────────────────────────────────────────────────────"
+    printf '%s\n' "$RECENT_HF_BULLETIN"
+    echo "──────────────────────────────────────────────────────────"
+    echo
 }
 
 # ============================================================
@@ -1561,3 +1608,4 @@ initialize_manager_state
 prepare_manager_state
 
 main_menu
+
