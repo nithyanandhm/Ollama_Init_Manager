@@ -26,8 +26,11 @@ OLLAMA_MODELS="/home/ubuntu/Models"
 OLLAMA_INSTALLED=false
 OLLAMA_VERSION=""
 
+MODEL_COUNT=0
+MODEL_BULLETIN=""
+
 # ─────────────────────────────────────────────────────────────
-# Helpers
+# Basic Helpers
 # ─────────────────────────────────────────────────────────────
 
 command_exists() {
@@ -41,25 +44,32 @@ pause() {
 
 header() {
     clear
+
     echo
+
     printf '%s\n' "${CYAN}${BOLD}╔══════════════════════════════════════════════════════════╗${RESET}"
     printf '%s\n' "${CYAN}${BOLD}║${WHITE}                 RUNPOD OLLAMA MANAGER                  ${CYAN}║${RESET}"
     printf '%s\n' "${CYAN}${BOLD}╚══════════════════════════════════════════════════════════╝${RESET}"
+
     echo
 }
 
 # ─────────────────────────────────────────────────────────────
-# Quiet Ollama Detection
+# Ollama Detection
 # ─────────────────────────────────────────────────────────────
 
 check_ollama_installed() {
 
     if command_exists ollama; then
+
         OLLAMA_INSTALLED=true
         OLLAMA_VERSION=$(ollama --version 2>/dev/null || echo "unknown")
+
     else
+
         OLLAMA_INSTALLED=false
         OLLAMA_VERSION=""
+
     fi
 }
 
@@ -94,9 +104,13 @@ configure_models_directory() {
     mkdir -p "$OLLAMA_MODELS"
 
     if id ollama >/dev/null 2>&1; then
+
         chown -R ollama:ollama "$OLLAMA_MODELS"
+
     elif id ubuntu >/dev/null 2>&1; then
+
         chown -R ubuntu:ubuntu "$OLLAMA_MODELS"
+
     fi
 
     chmod 755 "$OLLAMA_MODELS"
@@ -127,7 +141,90 @@ check_dependencies() {
         apt-get install -y "${missing[@]}"
 
     echo
+
     printf '%s\n' "${GREEN}✓${RESET} Dependencies installed."
+}
+
+# ─────────────────────────────────────────────────────────────
+# Local Model Bulletin
+# ─────────────────────────────────────────────────────────────
+
+refresh_model_bulletin() {
+
+    MODEL_COUNT=0
+    MODEL_BULLETIN=""
+
+    if ! command_exists ollama; then
+
+        MODEL_BULLETIN="  Ollama is not installed."
+        return 0
+    fi
+
+    if ! ollama_running; then
+
+        MODEL_BULLETIN="  Ollama is not currently running."
+        return 0
+    fi
+
+    local RESPONSE
+
+    RESPONSE=$(curl -fsS \
+        --connect-timeout 2 \
+        --max-time 5 \
+        "${OLLAMA_API}/api/tags" 2>/dev/null) || {
+
+        MODEL_BULLETIN="  Unable to query local models."
+        return 0
+    }
+
+    MODEL_COUNT=$(echo "$RESPONSE" |
+        jq '.models | length' 2>/dev/null || echo 0)
+
+    if [ "$MODEL_COUNT" -eq 0 ]; then
+
+        MODEL_BULLETIN="  No models installed."
+        return 0
+    fi
+
+    MODEL_BULLETIN=$(
+        echo "$RESPONSE" |
+        jq -r '
+            .models[]
+            | "  • \(.name)\n" +
+              "      " +
+              (.details.parameter_size // "?") +
+              "  |  " +
+              (.details.quantization_level // "?") +
+              "  |  " +
+              (
+                if .size >= 1099511627776
+                then ((.size / 1099511627776 * 10 | floor) / 10 | tostring) + " TB"
+                elif .size >= 1073741824
+                then ((.size / 1073741824 * 10 | floor) / 10 | tostring) + " GB"
+                elif .size >= 1048576
+                then ((.size / 1048576 * 10 | floor) / 10 | tostring) + " MB"
+                else
+                  ((.size / 1024 * 10 | floor) / 10 | tostring) + " KB"
+                end
+              ) +
+              "\n"
+        '
+    )
+}
+
+show_model_bulletin() {
+
+    printf '%s\n' "${DIM}────────────────────────────────────────────────────────────${RESET}"
+    printf '%s\n' "${BOLD}LOCAL MODELS${RESET}"
+    printf '%s\n' "${DIM}────────────────────────────────────────────────────────────${RESET}"
+
+    echo
+
+    printf '%s\n' "$MODEL_BULLETIN"
+
+    printf '%s\n' "${DIM}────────────────────────────────────────────────────────────${RESET}"
+
+    echo
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -150,144 +247,6 @@ start_ollama_container() {
 }
 
 # ─────────────────────────────────────────────────────────────
-# Start Ollama
-# ─────────────────────────────────────────────────────────────
-
-start_ollama() {
-
-    header
-
-    printf '%s\n' "${BOLD}Start / Restart Ollama${RESET}"
-    echo
-
-    if ! command_exists ollama; then
-
-        printf '%s\n' "${RED}✗ Ollama is not installed.${RESET}"
-        echo
-        printf '%s\n' "${DIM}Use option [1] to install Ollama.${RESET}"
-
-        pause
-        return
-    fi
-
-    configure_models_directory
-
-    printf '%s\n' "  Host   : ${OLLAMA_HOST}"
-    printf '%s\n' "  Models : ${OLLAMA_MODELS}"
-    echo
-
-    # ─────────────────────────────────────────────────────────
-    # Stop existing instance if running
-    # ─────────────────────────────────────────────────────────
-
-    if ollama_running; then
-
-        printf '%s\n' "${YELLOW}→${RESET} Existing Ollama instance detected."
-        printf '%s\n' "${YELLOW}→${RESET} Restarting with configured model directory..."
-
-        if is_systemd; then
-
-            systemctl restart ollama
-
-        else
-
-            pkill -x ollama 2>/dev/null || true
-
-            sleep 2
-
-            start_ollama_container
-        fi
-
-    else
-
-        printf '%s\n' "${YELLOW}→${RESET} Starting Ollama..."
-
-        if is_systemd; then
-
-            systemctl restart ollama
-
-        else
-
-            start_ollama_container
-        fi
-    fi
-
-    sleep 2
-
-    echo
-
-    if ollama_running; then
-
-        printf '%s\n' "${GREEN}✓${RESET} Ollama is running."
-
-        echo
-
-        printf '%s\n' "  API    : ${OLLAMA_API}"
-        printf '%s\n' "  Models : ${OLLAMA_MODELS}"
-
-    else
-
-        printf '%s\n' "${RED}✗ Ollama failed to start.${RESET}"
-
-        echo
-
-        printf '%s\n' "${DIM}Log: /var/log/ollama-runpod.log${RESET}"
-
-    fi
-
-    echo
-
-    pause
-}
-
-# ─────────────────────────────────────────────────────────────
-# Stop Ollama
-# ─────────────────────────────────────────────────────────────
-
-stop_ollama() {
-
-    header
-
-    printf '%s\n' "${BOLD}Stop Ollama${RESET}"
-    echo
-
-    if ! ollama_running; then
-
-        printf '%s\n' "${DIM}Ollama is not running.${RESET}"
-
-        pause
-        return
-    fi
-
-    printf '%s\n' "${YELLOW}→${RESET} Stopping Ollama..."
-
-    if is_systemd; then
-
-        systemctl stop ollama
-
-    else
-
-        pkill -x ollama 2>/dev/null || true
-    fi
-
-    sleep 2
-
-    echo
-
-    if ollama_running; then
-
-        printf '%s\n' "${RED}✗ Ollama is still running.${RESET}"
-    else
-
-        printf '%s\n' "${GREEN}✓${RESET} Ollama stopped."
-    fi
-
-    echo
-
-    pause
-}
-
-# ─────────────────────────────────────────────────────────────
 # Install / Update Ollama
 # ─────────────────────────────────────────────────────────────
 
@@ -295,15 +254,23 @@ install_or_update_ollama() {
 
     header
 
+    check_ollama_installed
+    refresh_model_bulletin
+
     if [ "$OLLAMA_INSTALLED" = true ]; then
+
         printf '%s\n' "${BOLD}Update Ollama${RESET}"
+
     else
+
         printf '%s\n' "${BOLD}Install Ollama${RESET}"
+
     fi
 
     echo
 
-    # zstd is required by the current Ollama Linux installer.
+    show_model_bulletin
+
     if ! command_exists zstd; then
 
         printf '%s\n' "${YELLOW}→${RESET} zstd is required by the Ollama installer."
@@ -346,8 +313,6 @@ install_or_update_ollama() {
 
         printf '%s\n' "${RED}✗ Ollama installation failed.${RESET}"
 
-        echo
-
         pause
         return
     fi
@@ -355,13 +320,7 @@ install_or_update_ollama() {
     printf '%s\n' "${GREEN}✓${RESET} Ollama ${OLLAMA_VERSION}"
     echo
 
-    # Reconfigure model directory after installation because the
-    # installer may have created the ollama service user.
     configure_models_directory
-
-    # ─────────────────────────────────────────────────────────
-    # systemd environment
-    # ─────────────────────────────────────────────────────────
 
     if is_systemd; then
 
@@ -386,14 +345,10 @@ EOF
 
     echo
 
-    # ─────────────────────────────────────────────────────────
-    # Start Ollama
-    # ─────────────────────────────────────────────────────────
-
     if ollama_running; then
 
         printf '%s\n' "${YELLOW}→${RESET} Ollama is already running."
-        printf '%s\n' "${YELLOW}→${RESET} Restarting with the configured model directory..."
+        printf '%s\n' "${YELLOW}→${RESET} Restarting with configured model directory..."
 
         if is_systemd; then
 
@@ -402,8 +357,11 @@ EOF
         else
 
             pkill -x ollama 2>/dev/null || true
+
             sleep 2
+
             start_ollama_container
+
         fi
 
     else
@@ -418,6 +376,7 @@ EOF
         else
 
             start_ollama_container
+
         fi
     fi
 
@@ -445,6 +404,148 @@ EOF
 }
 
 # ─────────────────────────────────────────────────────────────
+# Start / Restart Ollama
+# ─────────────────────────────────────────────────────────────
+
+start_ollama() {
+
+    header
+
+    check_ollama_installed
+    refresh_model_bulletin
+
+    printf '%s\n' "${BOLD}Start / Restart Ollama${RESET}"
+    echo
+
+    show_model_bulletin
+
+    if ! command_exists ollama; then
+
+        printf '%s\n' "${RED}✗ Ollama is not installed.${RESET}"
+        printf '%s\n' "${DIM}Use option [1] to install Ollama.${RESET}"
+
+        pause
+        return
+    fi
+
+    configure_models_directory
+
+    printf '%s\n' "  Host   : ${OLLAMA_HOST}"
+    printf '%s\n' "  Models : ${OLLAMA_MODELS}"
+
+    echo
+
+    if ollama_running; then
+
+        printf '%s\n' "${YELLOW}→${RESET} Existing Ollama instance detected."
+        printf '%s\n' "${YELLOW}→${RESET} Restarting..."
+
+        if is_systemd; then
+
+            systemctl restart ollama
+
+        else
+
+            pkill -x ollama 2>/dev/null || true
+
+            sleep 2
+
+            start_ollama_container
+
+        fi
+
+    else
+
+        printf '%s\n' "${YELLOW}→${RESET} Starting Ollama..."
+
+        if is_systemd; then
+
+            systemctl restart ollama
+
+        else
+
+            start_ollama_container
+
+        fi
+
+    fi
+
+    sleep 2
+
+    echo
+
+    if ollama_running; then
+
+        printf '%s\n' "${GREEN}✓${RESET} Ollama is running."
+
+    else
+
+        printf '%s\n' "${RED}✗ Ollama failed to start.${RESET}"
+        printf '%s\n' "${DIM}Check /var/log/ollama-runpod.log${RESET}"
+
+    fi
+
+    echo
+
+    pause
+}
+
+# ─────────────────────────────────────────────────────────────
+# Stop Ollama
+# ─────────────────────────────────────────────────────────────
+
+stop_ollama() {
+
+    header
+
+    check_ollama_installed
+    refresh_model_bulletin
+
+    printf '%s\n' "${BOLD}Stop Ollama${RESET}"
+    echo
+
+    show_model_bulletin
+
+    if ! ollama_running; then
+
+        printf '%s\n' "${DIM}Ollama is not running.${RESET}"
+
+        pause
+        return
+    fi
+
+    printf '%s\n' "${YELLOW}→${RESET} Stopping Ollama..."
+
+    if is_systemd; then
+
+        systemctl stop ollama
+
+    else
+
+        pkill -x ollama 2>/dev/null || true
+
+    fi
+
+    sleep 2
+
+    echo
+
+    if ollama_running; then
+
+        printf '%s\n' "${RED}✗ Ollama is still running.${RESET}"
+
+    else
+
+        printf '%s\n' "${GREEN}✓${RESET} Ollama stopped."
+
+    fi
+
+    echo
+
+    pause
+}
+
+# ─────────────────────────────────────────────────────────────
 # Ollama Status
 # ─────────────────────────────────────────────────────────────
 
@@ -452,10 +553,13 @@ ollama_status() {
 
     header
 
+    check_ollama_installed
+    refresh_model_bulletin
+
     printf '%s\n' "${BOLD}Ollama Status${RESET}"
     echo
 
-    check_ollama_installed
+    show_model_bulletin
 
     if [ "$OLLAMA_INSTALLED" = true ]; then
 
@@ -465,8 +569,6 @@ ollama_status() {
     else
 
         printf '%s\n' "  Installed : ${RED}NO${RESET}"
-
-        echo
 
         pause
         return
@@ -511,8 +613,13 @@ list_models() {
 
     header
 
+    check_ollama_installed
+    refresh_model_bulletin
+
     printf '%s\n' "${BOLD}Installed Ollama Models${RESET}"
     echo
+
+    show_model_bulletin
 
     if ! command_exists ollama; then
 
@@ -525,8 +632,6 @@ list_models() {
     if ! ollama_running; then
 
         printf '%s\n' "${RED}✗ Ollama is not running.${RESET}"
-
-        echo
 
         pause
         return
@@ -545,6 +650,29 @@ list_models() {
 }
 
 # ─────────────────────────────────────────────────────────────
+# Manual Model Bulletin Refresh
+# ─────────────────────────────────────────────────────────────
+
+refresh_models_page() {
+
+    header
+
+    check_ollama_installed
+    refresh_model_bulletin
+
+    printf '%s\n' "${BOLD}Refresh Local Models${RESET}"
+    echo
+
+    show_model_bulletin
+
+    printf '%s\n' "${GREEN}✓${RESET} Local model bulletin refreshed."
+
+    echo
+
+    pause
+}
+
+# ─────────────────────────────────────────────────────────────
 # Pull Ollama Registry Model
 # ─────────────────────────────────────────────────────────────
 
@@ -552,8 +680,29 @@ pull_ollama_model() {
 
     header
 
+    check_ollama_installed
+    refresh_model_bulletin
+
     printf '%s\n' "${BOLD}Pull Ollama Registry Model${RESET}"
     echo
+
+    show_model_bulletin
+
+    if ! command_exists ollama; then
+
+        printf '%s\n' "${RED}✗ Ollama is not installed.${RESET}"
+
+        pause
+        return
+    fi
+
+    if ! ollama_running; then
+
+        printf '%s\n' "${RED}✗ Ollama is not running.${RESET}"
+
+        pause
+        return
+    fi
 
     printf '%s\n' "${DIM}Examples: qwen3:8b, qwen3-coder:30b, gpt-oss:20b${RESET}"
     echo
@@ -581,6 +730,13 @@ pull_ollama_model() {
     printf '%s\n' "${GREEN}✓${RESET} Pull complete."
 
     echo
+
+    refresh_model_bulletin
+
+    printf '%s\n' "${BOLD}Updated Local Models${RESET}"
+    echo
+
+    show_model_bulletin
 
     pause
 }
@@ -615,11 +771,17 @@ query_hf_repo() {
 
     header
 
+    check_ollama_installed
+    refresh_model_bulletin
+
     printf '%s\n' "${BOLD}Query Hugging Face Repository${RESET}"
     echo
 
+    show_model_bulletin
+
     printf '%s\n' "${DIM}Paste a Hugging Face model repository URL.${RESET}"
     printf '%s\n' "${DIM}Example: https://huggingface.co/ggml-org/Qwen3-32B-GGUF${RESET}"
+
     echo
 
     printf '%s' "Repository URL: "
@@ -649,7 +811,9 @@ query_hf_repo() {
     printf '%s\n' "${YELLOW}→${RESET} Querying Hugging Face..."
     echo
 
-    RESPONSE=$(curl -fsSL "https://huggingface.co/api/models/${REPO}") || {
+    API_URL="https://huggingface.co/api/models/${REPO}"
+
+    RESPONSE=$(curl -fsSL "$API_URL") || {
 
         printf '%s\n' "${RED}✗ Unable to query repository.${RESET}"
 
@@ -691,11 +855,33 @@ pull_hf_model() {
 
     header
 
+    check_ollama_installed
+    refresh_model_bulletin
+
     printf '%s\n' "${BOLD}Pull Hugging Face GGUF Model${RESET}"
     echo
 
+    show_model_bulletin
+
+    if ! command_exists ollama; then
+
+        printf '%s\n' "${RED}✗ Ollama is not installed.${RESET}"
+
+        pause
+        return
+    fi
+
+    if ! ollama_running; then
+
+        printf '%s\n' "${RED}✗ Ollama is not running.${RESET}"
+
+        pause
+        return
+    fi
+
     printf '%s\n' "${DIM}Paste the Hugging Face repository URL.${RESET}"
     printf '%s\n' "${DIM}Example: https://huggingface.co/ggml-org/Qwen3-32B-GGUF${RESET}"
+
     echo
 
     printf '%s' "Repository URL: "
@@ -793,9 +979,13 @@ pull_hf_model() {
     echo
 
     if [ -n "$QUANT" ]; then
+
         MODEL_REF="hf.co/${REPO}:${QUANT}"
+
     else
+
         MODEL_REF="hf.co/${REPO}"
+
     fi
 
     printf '%s\n' "${BOLD}Ollama reference${RESET}"
@@ -827,6 +1017,13 @@ pull_hf_model() {
 
     echo
 
+    refresh_model_bulletin
+
+    printf '%s\n' "${BOLD}Updated Local Models${RESET}"
+    echo
+
+    show_model_bulletin
+
     pause
 }
 
@@ -838,8 +1035,21 @@ show_model() {
 
     header
 
+    check_ollama_installed
+    refresh_model_bulletin
+
     printf '%s\n' "${BOLD}Show Model Details${RESET}"
     echo
+
+    show_model_bulletin
+
+    if ! ollama_running; then
+
+        printf '%s\n' "${RED}✗ Ollama is not running.${RESET}"
+
+        pause
+        return
+    fi
 
     printf '%s' "Model name: "
     read -r MODEL < /dev/tty
@@ -869,8 +1079,21 @@ remove_model() {
 
     header
 
+    check_ollama_installed
+    refresh_model_bulletin
+
     printf '%s\n' "${BOLD}Remove Ollama Model${RESET}"
     echo
+
+    show_model_bulletin
+
+    if ! ollama_running; then
+
+        printf '%s\n' "${RED}✗ Ollama is not running.${RESET}"
+
+        pause
+        return
+    fi
 
     printf '%s' "Model name: "
     read -r MODEL < /dev/tty
@@ -904,6 +1127,15 @@ remove_model() {
 
     printf '%s\n' "${GREEN}✓${RESET} Model removed."
 
+    echo
+
+    refresh_model_bulletin
+
+    printf '%s\n' "${BOLD}Updated Local Models${RESET}"
+    echo
+
+    show_model_bulletin
+
     pause
 }
 
@@ -915,8 +1147,21 @@ run_model() {
 
     header
 
+    check_ollama_installed
+    refresh_model_bulletin
+
     printf '%s\n' "${BOLD}Run Ollama Model${RESET}"
     echo
+
+    show_model_bulletin
+
+    if ! ollama_running; then
+
+        printf '%s\n' "${RED}✗ Ollama is not running.${RESET}"
+
+        pause
+        return
+    fi
 
     printf '%s' "Model name: "
     read -r MODEL < /dev/tty
@@ -955,6 +1200,11 @@ while true; do
 
     header
 
+    check_ollama_installed
+
+    # Fresh model query every time the landing page is displayed.
+    refresh_model_bulletin
+
     printf '%s\n' "${BOLD}Ollama Configuration${RESET}"
     echo
 
@@ -972,6 +1222,8 @@ while true; do
 
     echo
 
+    show_model_bulletin
+
     if [ "$OLLAMA_INSTALLED" = true ]; then
 
         printf '%s\n' "  ${CYAN}[1]${RESET}   Update Ollama"
@@ -985,14 +1237,15 @@ while true; do
     printf '%s\n' "  ${CYAN}[2]${RESET}   Start / restart Ollama"
     printf '%s\n' "  ${CYAN}[3]${RESET}   Stop Ollama"
     printf '%s\n' "  ${CYAN}[4]${RESET}   Ollama status"
-    printf '%s\n' "  ${CYAN}[5]${RESET}   List installed models"
-    printf '%s\n' "  ${CYAN}[6]${RESET}   Pull Ollama model"
-    printf '%s\n' "  ${CYAN}[7]${RESET}   Query Hugging Face repository"
-    printf '%s\n' "  ${CYAN}[8]${RESET}   Pull Hugging Face GGUF"
-    printf '%s\n' "  ${CYAN}[9]${RESET}   Show model details"
-    printf '%s\n' "  ${CYAN}[10]${RESET}  Remove model"
-    printf '%s\n' "  ${CYAN}[11]${RESET}  Run model"
-    printf '%s\n' "  ${CYAN}[12]${RESET}  Exit"
+    printf '%s\n' "  ${CYAN}[5]${RESET}   Refresh local models"
+    printf '%s\n' "  ${CYAN}[6]${RESET}   List installed models"
+    printf '%s\n' "  ${CYAN}[7]${RESET}   Pull Ollama model"
+    printf '%s\n' "  ${CYAN}[8]${RESET}   Query Hugging Face repository"
+    printf '%s\n' "  ${CYAN}[9]${RESET}   Pull Hugging Face GGUF"
+    printf '%s\n' "  ${CYAN}[10]${RESET}  Show model details"
+    printf '%s\n' "  ${CYAN}[11]${RESET}  Remove model"
+    printf '%s\n' "  ${CYAN}[12]${RESET}  Run model"
+    printf '%s\n' "  ${CYAN}[13]${RESET}  Exit"
 
     echo
 
@@ -1000,7 +1253,7 @@ while true; do
 
     echo
 
-    printf '%s' "${BOLD}Select an option [1-12]:${RESET} "
+    printf '%s' "${BOLD}Select an option [1-13]:${RESET} "
     read -r OPTION < /dev/tty
 
     case "$OPTION" in
@@ -1022,34 +1275,38 @@ while true; do
             ;;
 
         5)
-            list_models
+            refresh_models_page
             ;;
 
         6)
-            pull_ollama_model
+            list_models
             ;;
 
         7)
-            query_hf_repo
+            pull_ollama_model
             ;;
 
         8)
-            pull_hf_model
+            query_hf_repo
             ;;
 
         9)
-            show_model
+            pull_hf_model
             ;;
 
         10)
-            remove_model
+            show_model
             ;;
 
         11)
-            run_model
+            remove_model
             ;;
 
         12)
+            run_model
+            ;;
+
+        13)
             echo
             printf '%s\n' "${GREEN}Goodbye.${RESET}"
             echo
