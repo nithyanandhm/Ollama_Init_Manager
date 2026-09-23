@@ -1282,22 +1282,59 @@ remove_model() {
         return
     fi
 
-    printf "Model name: "
-    read -r MODEL < /dev/tty
+    mapfile -t LOCAL_MODELS < <(
+        NO_COLOR=1 ollama list 2>/dev/null |
+        awk 'NR > 1 && NF {print $1}'
+    )
 
-    if [ -z "$MODEL" ]; then
-        echo -e "${YELLOW}No model specified.${RESET}"
+    if [ "${#LOCAL_MODELS[@]}" -eq 0 ]; then
+        echo -e "${YELLOW}No local Ollama models found.${RESET}"
         pause
         return
     fi
 
     echo
+    echo -e "${WHITE}INSTALLED OLLAMA MODELS${RESET}"
+    echo "──────────────────────────────────────────────────────────"
+
+    local i
+    for i in "${!LOCAL_MODELS[@]}"; do
+        printf "[%d] %s
+" "$((i + 1))" "${LOCAL_MODELS[$i]}"
+    done
+
+    echo "──────────────────────────────────────────────────────────"
+    echo "[0] Cancel"
+    echo
+
+    printf "Select model [0-%d]: " "${#LOCAL_MODELS[@]}"
+    read -r MODEL_SELECTION < /dev/tty
+
+    if [ "$MODEL_SELECTION" = "0" ]; then
+        echo "Cancelled."
+        pause
+        return
+    fi
+
+    if ! [[ "$MODEL_SELECTION" =~ ^[0-9]+$ ]] ||
+       [ "$MODEL_SELECTION" -lt 1 ] ||
+       [ "$MODEL_SELECTION" -gt "${#LOCAL_MODELS[@]}" ]; then
+        echo -e "${RED}Invalid selection.${RESET}"
+        pause
+        return
+    fi
+
+    MODEL="${LOCAL_MODELS[$((MODEL_SELECTION - 1))]}"
+
+    echo
+    echo "Selected model : $MODEL"
+    echo
+
     printf "Remove %s? [y/N]: " "$MODEL"
     read -r CONFIRM < /dev/tty
 
     case "$CONFIRM" in
-        y|Y|yes|YES)
-            ;;
+        y|Y|yes|YES) ;;
         *)
             echo "Cancelled."
             pause
@@ -1608,4 +1645,6 @@ initialize_manager_state
 prepare_manager_state
 
 main_menu
+
+
 
